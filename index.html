@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>课时记账</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body{font-family:-apple-system,Helvetica,Arial,sans-serif;background:#f5f6f8;margin:0;padding:16px;color:#222}
+  h1{font-size:20px}
+  .card{background:#fff;border-radius:10px;padding:14px;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+  label{display:block;font-size:13px;color:#555;margin-top:8px}
+  input,select{width:100%;padding:8px;margin-top:4px;border:1px solid #ddd;border-radius:6px;box-sizing:border-box;font-size:14px}
+  button{margin-top:12px;padding:10px 14px;border:none;border-radius:8px;background:#2563eb;color:#fff;font-size:14px;cursor:pointer}
+  button.secondary{background:#e5e7eb;color:#222}
+  table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px}
+  th,td{border-bottom:1px solid #eee;padding:6px;text-align:left}
+  .tabs{display:flex;gap:8px;margin-bottom:12px}
+  .tab{flex:1;text-align:center;padding:8px;background:#eee;border-radius:8px;cursor:pointer;font-size:14px}
+  .tab.active{background:#2563eb;color:#fff}
+  .section{display:none}
+  .section.active{display:block}
+  .del{color:#dc2626;cursor:pointer;font-size:12px}
+  .summaryTotal{font-weight:bold;background:#f0f4ff}
+</style>
+</head>
+<body>
+
+<h1>📚 课时记账</h1>
+
+<div class="tabs">
+  <div class="tab active" data-tab="record">记账</div>
+  <div class="tab" data-tab="students">学生/分组</div>
+  <div class="tab" data-tab="stats">月度统计</div>
+</div>
+
+<!-- 记账 -->
+<div class="section active" id="record">
+  <div class="card">
+    <label>日期</label>
+    <input type="date" id="lessonDate">
+    <label>上课时间点</label>
+    <input type="time" id="lessonTime">
+    <label>学生</label>
+    <select id="lessonStudent"></select>
+    <label>课时（小时）</label>
+    <input type="number" step="0.1" id="lessonHours" placeholder="例如 1.5">
+    <label>单价（元/小时）</label>
+    <input type="number" step="1" id="lessonPrice" placeholder="例如 150">
+    <button onclick="addLesson()">保存记录</button>
+  </div>
+
+  <div class="card">
+    <h3>近期记录</h3>
+    <table id="lessonTable">
+      <thead><tr><th>日期</th><th>时间</th><th>学生</th><th>课时</th><th>单价</th><th>金额</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- 学生/分组 -->
+<div class="section" id="students">
+  <div class="card">
+    <h3>新增分组</h3>
+    <label>分组名称</label>
+    <input id="groupName" placeholder="例如：A组 / 单独课-张三">
+    <button onclick="addGroup()">新增分组</button>
+  </div>
+
+  <div class="card">
+    <h3>新增学生</h3>
+    <label>姓名</label>
+    <input id="studentName" placeholder="学生姓名">
+    <label>所属分组</label>
+    <select id="studentGroup"></select>
+    <button onclick="addStudent()">新增学生</button>
+  </div>
+
+  <div class="card">
+    <h3>学生列表</h3>
+    <table id="studentTable">
+      <thead><tr><th>姓名</th><th>分组</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>分组列表</h3>
+    <table id="groupTable">
+      <thead><tr><th>分组</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- 统计 -->
+<div class="section" id="stats">
+  <div class="card">
+    <label>选择月份</label>
+    <input type="month" id="statMonth">
+    <button onclick="renderStats()">统计</button>
+    <button class="secondary" onclick="exportCSV()">导出 CSV</button>
+  </div>
+
+  <div class="card">
+    <h3>按学生统计</h3>
+    <table id="statStudentTable">
+      <thead><tr><th>学生</th><th>总课时</th><th>总费用</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>按分组统计</h3>
+    <table id="statGroupTable">
+      <thead><tr><th>分组</th><th>总课时</th><th>总费用</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const DB_KEY = 'lesson_billing_data_v1';
+
+function loadDB(){
+  const raw = localStorage.getItem(DB_KEY);
+  if(raw) return JSON.parse(raw);
+  return { groups: [], students: [], lessons: [] };
+}
+function saveDB(){ localStorage.setItem(DB_KEY, JSON.stringify(db)); }
+
+let db = loadDB();
+
+// ---------- Tabs ----------
+document.querySelectorAll('.tab').forEach(t=>{
+  t.onclick = ()=>{
+    document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+    document.querySelectorAll('.section').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    document.getElementById(t.dataset.tab).classList.add('active');
+    if(t.dataset.tab==='record') renderLessons();
+    if(t.dataset.tab==='students') renderStudentsAndGroups();
+    if(t.dataset.tab==='stats') renderStats();
+  };
+});
+
+// ---------- Groups ----------
+function addGroup(){
+  const name = document.getElementById('groupName').value.trim();
+  if(!name) return alert('请输入分组名称');
+  db.groups.push({ id: Date.now().toString(), name });
+  document.getElementById('groupName').value='';
+  saveDB();
+  renderStudentsAndGroups();
+}
+function deleteGroup(id){
+  if(!confirm('删除该分组？(不会删除学生，但学生会变为未分组)')) return;
+  db.groups = db.groups.filter(g=>g.id!==id);
+  db.students.forEach(s=>{ if(s.groupId===id) s.groupId=''; });
+  saveDB();
+  renderStudentsAndGroups();
+}
+
+// ---------- Students ----------
+function addStudent(){
+  const name = document.getElementById('studentName').value.trim();
+  const groupId = document.getElementById('studentGroup').value;
+  if(!name) return alert('请输入学生姓名');
+  db.students.push({ id: Date.now().toString(), name, groupId });
+  document.getElementById('studentName').value='';
+  saveDB();
+  renderStudentsAndGroups();
+  fillStudentSelects();
+}
+function deleteStudent(id){
+  if(!confirm('删除该学生？相关课时记录不会自动删除。')) return;
+  db.students = db.students.filter(s=>s.id!==id);
+  saveDB();
+  renderStudentsAndGroups();
+  fillStudentSelects();
+}
+
+function fillStudentSelects(){
+  const lessonSel = document.getElementById('lessonStudent');
+  const groupSel = document.getElementById('studentGroup');
+  lessonSel.innerHTML = db.students.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+  groupSel.innerHTML = '<option value="">未分组</option>' + db.groups.map(g=>`<option value="${g.id}">${g.name}</option>`).join('');
+}
+
+function renderStudentsAndGroups(){
+  fillStudentSelects();
+  const sTbody = document.querySelector('#studentTable tbody');
+  sTbody.innerHTML = db.students.map(s=>{
+    const g = db.groups.find(g=>g.id===s.groupId);
+    return `<tr><td>${s.name}</td><td>${g?g.name:'未分组'}</td><td><span class="del" onclick="deleteStudent('${s.id}')">删除</span></td></tr>`;
+  }).join('');
+
+  const gTbody = document.querySelector('#groupTable tbody');
+  gTbody.innerHTML = db.groups.map(g=>{
+    return `<tr><td>${g.name}</td><td><span class="del" onclick="deleteGroup('${g.id}')">删除</span></td></tr>`;
+  }).join('');
+}
+
+// ---------- Lessons ----------
+function addLesson(){
+  const date = document.getElementById('lessonDate').value;
+  const time = document.getElementById('lessonTime').value;
+  const studentId = document.getElementById('lessonStudent').value;
+  const hours = parseFloat(document.getElementById('lessonHours').value);
+  const price = parseFloat(document.getElementById('lessonPrice').value);
+
+  if(!date || !studentId || !hours || !price) return alert('请完整填写日期/学生/课时/单价');
+
+  db.lessons.push({
+    id: Date.now().toString(),
+    date, time, studentId, hours, price,
+    amount: +(hours*price).toFixed(2)
+  });
+  saveDB();
+  document.getElementById('lessonHours').value='';
+  document.getElementById('lessonPrice').value='';
+  renderLessons();
+}
+
+function deleteLesson(id){
+  db.lessons = db.lessons.filter(l=>l.id!==id);
+  saveDB();
+  renderLessons();
+}
+
+function studentName(id){
+  const s = db.students.find(s=>s.id===id);
+  return s ? s.name : '(已删除)';
+}
+
+function renderLessons(){
+  fillStudentSelects();
+  const tbody = document.querySelector('#lessonTable tbody');
+  const sorted = [...db.lessons].sort((a,b)=> (b.date+b.time).localeCompare(a.date+a.time));
+  tbody.innerHTML = sorted.slice(0,50).map(l=>`
+    <tr>
+      <td>${l.date}</td><td>${l.time||''}</td><td>${studentName(l.studentId)}</td>
+      <td>${l.hours}</td><td>${l.price}</td><td>${l.amount}</td>
+      <td><span class="del" onclick="deleteLesson('${l.id}')">删除</span></td>
+    </tr>`).join('');
+}
+
+// ---------- Stats ----------
+function renderStats(){
+  const month = document.getElementById('statMonth').value; // YYYY-MM
+  if(!month) return;
+  const filtered = db.lessons.filter(l=>l.date.startsWith(month));
+
+  // 按学生
+  const byStudent = {};
+  filtered.forEach(l=>{
+    if(!byStudent[l.studentId]) byStudent[l.studentId] = { hours:0, amount:0 };
+    byStudent[l.studentId].hours += l.hours;
+    byStudent[l.studentId].amount += l.amount;
+  });
+  const sTbody = document.querySelector('#statStudentTable tbody');
+  let sRows = Object.keys(byStudent).map(sid=>{
+    const d = byStudent[sid];
+    return `<tr><td>${studentName(sid)}</td><td>${d.hours.toFixed(1)}</td><td>${d.amount.toFixed(2)}</td></tr>`;
+  });
+  const totalHours = filtered.reduce((a,l)=>a+l.hours,0);
+  const totalAmount = filtered.reduce((a,l)=>a+l.amount,0);
+  sRows.push(`<tr class="summaryTotal"><td>合计</td><td>${totalHours.toFixed(1)}</td><td>${totalAmount.toFixed(2)}</td></tr>`);
+  sTbody.innerHTML = sRows.join('');
+
+  // 按分组（未分组学生各自单独一行）
+  const byGroup = {};
+  filtered.forEach(l=>{
+    const student = db.students.find(s=>s.id===l.studentId);
+    const gid = student && student.groupId ? student.groupId : ('__single_'+l.studentId);
+    if(!byGroup[gid]) byGroup[gid] = { hours:0, amount:0 };
+    byGroup[gid].hours += l.hours;
+    byGroup[gid].amount += l.amount;
+  });
+  const gTbody = document.querySelector('#statGroupTable tbody');
+  let gRows = Object.keys(byGroup).map(gid=>{
+    const d = byGroup[gid];
+    let label;
+    if(gid.startsWith('__single_')){
+      label = studentName(gid.replace('__single_','')) + '（单独统计）';
+    } else {
+      const g = db.groups.find(g=>g.id===gid);
+      label = g ? g.name : '未分组';
+    }
+    return `<tr><td>${label}</td><td>${d.hours.toFixed(1)}</td><td>${d.amount.toFixed(2)}</td></tr>`;
+  });
+  gRows.push(`<tr class="summaryTotal"><td>总计</td><td>${totalHours.toFixed(1)}</td><td>${totalAmount.toFixed(2)}</td></tr>`);
+  gTbody.innerHTML = gRows.join('');
+}
+
+function exportCSV(){
+  const month = document.getElementById('statMonth').value;
+  if(!month) return alert('请先选择月份并统计');
+  const filtered = db.lessons.filter(l=>l.date.startsWith(month));
+  let csv = '日期,时间,学生,课时,单价,金额\n';
+  filtered.forEach(l=>{
+    csv += `${l.date},${l.time||''},${studentName(l.studentId)},${l.hours},${l.price},${l.amount}\n`;
+  });
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `课时统计_${month}.csv`;
+  a.click();
+}
+
+// ---------- Init ----------
+document.getElementById('lessonDate').value = new Date().toISOString().slice(0,10);
+document.getElementById('statMonth').value = new Date().toISOString().slice(0,7);
+renderStudentsAndGroups();
+renderLessons();
+</script>
+</body>
+</html>
